@@ -13,6 +13,8 @@ body{display:flex;flex-direction:column;height:100dvh}
 #stage{position:relative;flex:1;min-height:0}
 #map,#hud{position:absolute;inset:0;width:100%;height:100%}
 #hud{pointer-events:none}
+#map{background:linear-gradient(#0b1d46 0%,#2a3f6b 40%)}
+.maplibregl-ctrl-bottom-right,.maplibregl-ctrl-bottom-left{bottom:104px}
 #empty{position:absolute;left:16px;right:16px;top:16px;padding:14px 16px;background:rgba(18,22,26,.88);border-radius:10px;max-width:420px}
 #empty p{margin:0 0 4px}#empty small{color:var(--mute)}
 #panel{background:var(--panel);border-top:1px solid var(--line);padding:12px 14px calc(12px + env(safe-area-inset-bottom,0px));display:grid;gap:10px}
@@ -81,11 +83,12 @@ map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-
 const empty = { type: 'FeatureCollection', features: [] };
 map.on('load', () => {
   map.setTerrain({ source: 'dem', exaggeration: 1.15 });
-  ['route', 'done', 'pos'].forEach(id => map.addSource(id, { type: 'geojson', data: empty }));
+  ['route', 'done', 'start', 'pos'].forEach(id => map.addSource(id, { type: 'geojson', data: empty }));
   const cap = { 'line-cap': 'round', 'line-join': 'round' };
   map.addLayer({ id: 'route', type: 'line', source: 'route', layout: cap, paint: { 'line-color': '#fff', 'line-opacity': 0.5, 'line-width': 3 } });
-  map.addLayer({ id: 'glow', type: 'line', source: 'done', layout: cap, paint: { 'line-color': '#ff3d71', 'line-width': 14, 'line-blur': 10, 'line-opacity': 0.55 } });
+  map.addLayer({ id: 'glow', type: 'line', source: 'done', layout: cap, paint: { 'line-color': '#0b0f14', 'line-width': 10, 'line-opacity': 0.7 } });
   map.addLayer({ id: 'done', type: 'line', source: 'done', layout: cap, paint: { 'line-color': '#ff3d71', 'line-width': 5 } });
+  map.addLayer({ id: 'start', type: 'circle', source: 'start', paint: { 'circle-radius': 7, 'circle-color': '#7ed957', 'circle-stroke-color': '#0b0f14', 'circle-stroke-width': 3 } });
   map.addLayer({ id: 'pos', type: 'circle', source: 'pos', paint: { 'circle-radius': 8, 'circle-color': '#fff', 'circle-stroke-color': '#ff3d71', 'circle-stroke-width': 4 } });
   syncHud();
 });
@@ -179,7 +182,7 @@ function drawHud(d) {
 }
 
 // ---------- Animación ----------
-let t = 0, playing = false, last = 0, bearing = 0, recorder = null, padTop = 0;
+let t = 0, playing = false, last = 0, bearing = 0, recorder = null, padTop = 0, clock = 0;
 const dur = () => +$('#dur').value;
 const fc = (type, coordinates) => ({ type: 'Feature', geometry: { type, coordinates }, properties: {} });
 const look = () => Math.max(150, total * 0.03);
@@ -190,30 +193,73 @@ function draw(u) {
   const d = u * total, p = at(d), ahead = Math.min(total - d, look());
   if (ahead > 10) bearing = lerpAngle(bearing, brg(p, at(d + ahead)), 0.06);
   const H = map.getContainer().clientHeight;
-  map.jumpTo({ center: [p[0], p[1]], bearing, pitch: 60, zoom: 15, padding: { top: padTop, bottom: 0, left: 0, right: 0 } });
+  map.jumpTo({ center: [p[0], p[1]], bearing, pitch: 70, zoom: 15.2, padding: { top: padTop, bottom: 0, left: 0, right: 0 } });
   // El relieve desplaza el punto en pantalla: se corrige para dejarlo entre el panel de datos y el perfil.
-  padTop = Math.max(0, Math.min(H * 0.9, padTop + (H * 0.53 - map.project([p[0], p[1]]).y) * 0.5));
+  padTop = Math.max(0, Math.min(H * 0.9, padTop + (H * 0.58 - map.project([p[0], p[1]]).y) * 0.5));
   map.getSource('done').setData(fc('LineString', [...P.slice(0, Math.floor(d / step) + 1).map(q => [q[0], q[1]]), [p[0], p[1]]]));
   map.getSource('pos').setData(fc('Point', [p[0], p[1]]));
   drawHud(d);
 }
+// Línea de tiempo: entrada (vista general que baja hasta la salida) > recorrido > cierre con resumen.
+const INTRO = 4, OUTRO = 4.5, ease = x => x < 0.5 ? 4 * x ** 3 : 1 - (-2 * x + 2) ** 3 / 2;
+const end = () => INTRO + dur() + OUTRO;
+let OV = { lng: -64, lat: -34, z: 5 };
+const lerp = (a, b, s) => a + (b - a) * s;
+
+function intro(k) {
+  const s = ease(k), a = at(0);
+  map.jumpTo({ center: [lerp(OV.lng, a[0], s), lerp(OV.lat, a[1], s)], zoom: lerp(OV.z, 15.2, s), pitch: 70 * s, bearing: lerpAngle(0, bearing, s), padding: { top: padTop * s, bottom: 0, left: 0, right: 0 } });
+  map.getSource('done').setData(empty); map.getSource('pos').setData(fc('Point', [a[0], a[1]]));
+  hx.clearRect(0, 0, hud.width, hud.height);
+}
+function outro(k) {
+  const s = ease(k), e = at(total);
+  map.jumpTo({ center: [lerp(e[0], OV.lng, s), lerp(e[1], OV.lat, s)], zoom: lerp(15.2, OV.z - 0.4, s), pitch: 70 - 25 * s, bearing: lerpAngle(bearing, 0, s), padding: { top: padTop * (1 - s), bottom: 0, left: 0, right: 0 } });
+  map.getSource('done').setData(fc('LineString', P.map(q => [q[0], q[1]]))); map.getSource('pos').setData(fc('Point', [e[0], e[1]]));
+  drawSummary(Math.min(1, k * 2));
+}
+function drawSummary(al) {
+  const s = hud.width / map.getContainer().clientWidth, W = hud.width / s, H = hud.height / s;
+  hx.clearRect(0, 0, hud.width, hud.height); hx.globalAlpha = al;
+  const w = Math.min(W - 24, 340), x = (W - w) / 2, y = H - 190, ms = hasTime ? P[P.length - 1][3] - P[0][3] : NaN;
+  hx.fillStyle = 'rgba(14,18,22,.82)'; hx.beginPath(); hx.roundRect(x * s, y * s, w * s, 150 * s, 14 * s); hx.fill();
+  [['Distancia', `${(total / 1000).toFixed(1)} km`], ['Tiempo', hasTime ? fmtT(ms) : '—'], ['Desnivel', `+${Math.round(gain)} m`], ['Vel. media', hasTime ? `${(total / (ms / 1000) * 3.6).toFixed(1)} km/h` : '—']].forEach(([l, v], i) => {
+    const cx = x + 20 + (i % 2) * (w / 2), cy = y + 36 + Math.floor(i / 2) * 62;
+    hx.fillStyle = '#8d9aa6'; hx.font = `${11 * s}px system-ui,sans-serif`; hx.fillText(l.toUpperCase(), cx * s, cy * s);
+    hx.fillStyle = '#fff'; hx.font = `600 ${22 * s}px system-ui,sans-serif`; hx.fillText(v, cx * s, (cy + 26) * s);
+  });
+  hx.globalAlpha = 1;
+}
 function frame(now) {
   if (!playing) return;
-  t = Math.min(1, t + (now - last) / 1000 / dur()); last = now;
-  draw(t);
-  if (t >= 1) { playing = false; if (recorder) setTimeout(() => recorder.stop(), 500); ui(); return; }
+  clock = Math.min(end(), clock + (now - last) / 1000); last = now;
+  const T = dur();
+  if (clock < INTRO) intro(clock / INTRO);
+  else if (clock < INTRO + T) { t = (clock - INTRO) / T; draw(t); }
+  else { t = 1; outro(Math.min(1, (clock - INTRO - T) / OUTRO)); }
+  if (clock >= end()) { playing = false; if (recorder) setTimeout(() => recorder.stop(), 500); ui(); return; }
   requestAnimationFrame(frame);
 }
-function play() { if (!P.length) return; if (t >= 1) t = 0; if (t === 0) { initBearing(); settle(); } playing = true; last = performance.now(); ui(); requestAnimationFrame(frame); }
+function play(ready) {
+  if (!P.length) return;
+  if (clock >= end()) { clock = 0; t = 0; }
+  if (clock === 0 && !ready) { initBearing(); settle(); intro(0); }
+  playing = true; last = performance.now(); ui(); requestAnimationFrame(frame);
+}
 function pause() { playing = false; ui(); }
 
 // ---------- Grabación: junta mapa + HUD en un canvas y graba ese canvas ----------
 const outC = document.createElement('canvas'), ox = outC.getContext('2d');
-map.on('render', () => { if (recorder) { ox.drawImage(map.getCanvas(), 0, 0); ox.drawImage(hud, 0, 0); } });
+map.on('render', () => {
+  if (!recorder) return;
+  const g = ox.createLinearGradient(0, 0, 0, outC.height * 0.4); g.addColorStop(0, '#0b1d46'); g.addColorStop(1, '#2a3f6b');
+  ox.fillStyle = g; ox.fillRect(0, 0, outC.width, outC.height);
+  ox.drawImage(map.getCanvas(), 0, 0); ox.drawImage(hud, 0, 0);
+});
 async function rec() {
   if (!P.length) return;
   if (!window.MediaRecorder) { alert('Este navegador no puede grabar video. Probá con Chrome.'); return; }
-  pause(); t = 0; initBearing(); settle();
+  pause(); clock = 0; t = 0; initBearing(); settle(); intro(0);
   await Promise.race([new Promise(r => map.once('idle', r)), new Promise(r => setTimeout(r, 4000))]);
   outC.width = hud.width; outC.height = hud.height;
   const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m));
@@ -225,14 +271,14 @@ async function rec() {
     a.href = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' })); a.download = 'ruta-3d.webm'; a.click();
     recorder = null; ui();
   };
-  recorder.start(); play();
+  recorder.start(); play(true);
 }
 
 // ---------- Interfaz ----------
 function ui() {
   const has = P.length > 0;
   $('#play').disabled = !has || !!recorder; $('#rec').disabled = !has || !!recorder;
-  $('#play').textContent = playing ? 'Pausar' : (t >= 1 ? 'Repetir' : 'Reproducir');
+  $('#play').textContent = playing ? 'Pausar' : (clock >= end() ? 'Repetir' : 'Reproducir');
   $('#rec').textContent = recorder ? 'Grabando…' : 'Grabar video';
 }
 $('#play').onclick = () => playing ? pause() : play();
@@ -243,10 +289,13 @@ $('#file').onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
   try {
     pause(); recorder = null;
-    P = resample(parseGPX(await f.text())); t = 0;
+    P = resample(parseGPX(await f.text())); t = 0; clock = 0;
     map.getSource('route').setData(fc('LineString', P.map(p => [p[0], p[1]])));
     map.getSource('done').setData(empty); map.getSource('pos').setData(empty);
     const b = P.reduce((bb, p) => bb.extend([p[0], p[1]]), new maplibregl.LngLatBounds([P[0][0], P[0][1]], [P[0][0], P[0][1]]));
+    const c = map.cameraForBounds(b, { padding: { top: 150, bottom: 120, left: 50, right: 50 } });
+    OV = c ? { lng: c.center.lng, lat: c.center.lat, z: c.zoom } : { lng: P[0][0], lat: P[0][1], z: 12 };
+    map.getSource('start').setData(fc('Point', [P[0][0], P[0][1]]));
     map.fitBounds(b, { padding: 50, pitch: 50, bearing: 0, duration: 1200 });
     $('#s1').innerHTML = `<b>${(total / 1000).toFixed(1)}</b> km · <b>+${Math.round(gain)}</b> m de desnivel` + (hasTime ? ` · <b>${fmtT(P[P.length - 1][3] - P[0][3])}</b>` : '');
     $('#empty').hidden = true; hx.clearRect(0, 0, hud.width, hud.height);
