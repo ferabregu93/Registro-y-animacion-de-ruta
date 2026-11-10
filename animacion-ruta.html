@@ -10,32 +10,33 @@
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 body{display:flex;flex-direction:column;height:100dvh}
-#map{flex:1;min-height:0}
+#stage{position:relative;flex:1;min-height:0}
+#map,#hud{position:absolute;inset:0;width:100%;height:100%}
+#hud{pointer-events:none}
 #empty{position:absolute;left:16px;right:16px;top:16px;padding:14px 16px;background:rgba(18,22,26,.88);border-radius:10px;max-width:420px}
-#empty p{margin:0 0 4px}
-#empty small{color:var(--mute)}
+#empty p{margin:0 0 4px}#empty small{color:var(--mute)}
 #panel{background:var(--panel);border-top:1px solid var(--line);padding:12px 14px calc(12px + env(safe-area-inset-bottom,0px));display:grid;gap:10px}
-#stats{display:flex;justify-content:space-between;gap:8px;color:var(--mute);font-variant-numeric:tabular-nums}
-#stats b{color:var(--ink);font-weight:600}
+#s1{color:var(--mute)}#s1 b{color:var(--ink)}
 .row{display:flex;gap:8px;align-items:center}
-button,.btn{font:inherit;color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:8px;padding:10px 14px;cursor:pointer;text-align:center}
+button,.btn,select{font:inherit;color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:8px;padding:10px 14px;cursor:pointer;text-align:center}
+select{background:var(--panel);padding:8px 10px}
 button:disabled{opacity:.4;cursor:default}
 .primary{background:var(--route);border-color:var(--route);color:#fff;font-weight:600}
 .grow{flex:1}
-button:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid #fff;outline-offset:2px}
+button:focus-visible,.btn:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #fff;outline-offset:2px}
 label.opt{display:flex;gap:8px;align-items:center;color:var(--mute);font-size:14px}
 input[type=range]{flex:1;accent-color:var(--route)}
 #file{position:absolute;width:1px;height:1px;opacity:0}
 </style>
 </head>
 <body>
-<div id="map"></div>
-<div id="empty">
-  <p>Cargá un archivo GPX para ver tu recorrido en 3D.</p>
-  <small>Sirve el que exportaste de OsmAnd.</small>
+<div id="stage">
+  <div id="map"></div>
+  <canvas id="hud"></canvas>
+  <div id="empty"><p>Cargá un archivo GPX para ver tu recorrido en 3D.</p><small>Sirve el que exportaste de OsmAnd.</small></div>
 </div>
 <div id="panel">
-  <div id="stats"><span id="s1">Sin recorrido</span><span id="s2"></span></div>
+  <div id="s1">Sin recorrido</div>
   <div class="row">
     <label class="btn grow" for="file">Cargar GPX</label>
     <input id="file" type="file" accept=".gpx,application/gpx+xml,text/xml,application/xml">
@@ -45,8 +46,8 @@ input[type=range]{flex:1;accent-color:var(--route)}
   <div class="row">
     <label class="opt" for="dur">Duración <span id="durv">30 s</span></label>
     <input id="dur" type="range" min="10" max="120" step="5" value="30">
+    <select id="sty" aria-label="Estilo de mapa"><option value="dark">Oscuro</option><option value="sat">Satélite</option><option value="osm">Calles</option></select>
   </div>
-  <label class="opt"><input id="sat" type="checkbox"> Vista satelital (Esri; revisá sus términos de uso)</label>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
@@ -54,23 +55,24 @@ input[type=range]{flex:1;accent-color:var(--route)}
 const $ = s => document.querySelector(s);
 const rad = Math.PI / 180;
 const DEM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+const ras = (tiles, attribution, maxzoom = 19) => ({ type: 'raster', tiles, tileSize: 256, maxzoom, attribution });
 
 const map = new maplibregl.Map({
-  container: 'map',
-  center: [-64, -34], zoom: 4, maxPitch: 80,
-  preserveDrawingBuffer: true,
+  container: 'map', center: [-64, -34], zoom: 4, maxPitch: 80, preserveDrawingBuffer: true,
   style: {
     version: 8,
     sources: {
-      osm: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize: 256, maxzoom: 19, attribution: '© OpenStreetMap' },
-      sat: { type: 'raster', tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 18, attribution: 'Imágenes © Esri' },
+      dark: ras(['a', 'b', 'c'].map(s => `https://${s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png`), '© CARTO © OpenStreetMap'),
+      osm: ras(['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], '© OpenStreetMap'),
+      sat: ras(['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], 'Imágenes © Esri', 18),
       dem: { type: 'raster-dem', tiles: [DEM], encoding: 'terrarium', tileSize: 256, maxzoom: 15, attribution: 'Relieve: Mapzen/AWS' },
-      hs:  { type: 'raster-dem', tiles: [DEM], encoding: 'terrarium', tileSize: 256, maxzoom: 15 }
+      hs: { type: 'raster-dem', tiles: [DEM], encoding: 'terrarium', tileSize: 256, maxzoom: 15 }
     },
     layers: [
-      { id: 'osm', type: 'raster', source: 'osm' },
+      { id: 'dark', type: 'raster', source: 'dark' },
+      { id: 'osm', type: 'raster', source: 'osm', layout: { visibility: 'none' } },
       { id: 'sat', type: 'raster', source: 'sat', layout: { visibility: 'none' } },
-      { id: 'hill', type: 'hillshade', source: 'hs', paint: { 'hillshade-exaggeration': 0.35 } }
+      { id: 'hill', type: 'hillshade', source: 'hs', paint: { 'hillshade-exaggeration': 0.5, 'hillshade-shadow-color': '#000', 'hillshade-highlight-color': '#8a96a3' } }
     ]
   }
 });
@@ -78,16 +80,17 @@ map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-
 
 const empty = { type: 'FeatureCollection', features: [] };
 map.on('load', () => {
-  map.setTerrain({ source: 'dem', exaggeration: 1.5 });
-  map.addSource('route', { type: 'geojson', data: empty });
-  map.addSource('done', { type: 'geojson', data: empty });
-  map.addSource('pos', { type: 'geojson', data: empty });
-  map.addLayer({ id: 'route', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#fff', 'line-opacity': 0.55, 'line-width': 4 } });
-  map.addLayer({ id: 'done', type: 'line', source: 'done', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#ff3d71', 'line-width': 5 } });
-  map.addLayer({ id: 'pos', type: 'circle', source: 'pos', paint: { 'circle-radius': 7, 'circle-color': '#ff3d71', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
+  map.setTerrain({ source: 'dem', exaggeration: 1.15 });
+  ['route', 'done', 'pos'].forEach(id => map.addSource(id, { type: 'geojson', data: empty }));
+  const cap = { 'line-cap': 'round', 'line-join': 'round' };
+  map.addLayer({ id: 'route', type: 'line', source: 'route', layout: cap, paint: { 'line-color': '#fff', 'line-opacity': 0.5, 'line-width': 3 } });
+  map.addLayer({ id: 'glow', type: 'line', source: 'done', layout: cap, paint: { 'line-color': '#ff3d71', 'line-width': 14, 'line-blur': 10, 'line-opacity': 0.55 } });
+  map.addLayer({ id: 'done', type: 'line', source: 'done', layout: cap, paint: { 'line-color': '#ff3d71', 'line-width': 5 } });
+  map.addLayer({ id: 'pos', type: 'circle', source: 'pos', paint: { 'circle-radius': 8, 'circle-color': '#fff', 'circle-stroke-color': '#ff3d71', 'circle-stroke-width': 4 } });
+  syncHud();
 });
 
-// ---------- Geometría ----------
+// ---------- Geometría y datos ----------
 function hav(a, b) {
   const R = 6371000, dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
@@ -99,92 +102,122 @@ function brg(a, b) {
   const x = Math.cos(a[1] * rad) * Math.sin(b[1] * rad) - Math.sin(a[1] * rad) * Math.cos(b[1] * rad) * Math.cos(dl);
   return (Math.atan2(y, x) / rad + 360) % 360;
 }
-function lerpAngle(a, b, k) { const d = ((b - a + 540) % 360) - 180; return (a + d * k + 360) % 360; }
+const lerpAngle = (a, b, k) => (a + (((b - a + 540) % 360) - 180) * k + 360) % 360;
 
-let P = [], step = 10, total = 0, gain = 0;
+let P = [], E = [], step = 10, total = 0, gain = 0, emin = 0, emax = 1, hasTime = false;
 
 function parseGPX(txt) {
   const x = new DOMParser().parseFromString(txt, 'application/xml');
-  const pts = [...x.querySelectorAll('trkpt')].map(p => ({
-    lat: +p.getAttribute('lat'), lon: +p.getAttribute('lon'),
-    ele: +(p.querySelector('ele')?.textContent || 0)
-  })).filter(p => isFinite(p.lat) && isFinite(p.lon));
+  const pts = [...x.querySelectorAll('trkpt')].map(p => {
+    const tm = p.querySelector('time')?.textContent;
+    return { lat: +p.getAttribute('lat'), lon: +p.getAttribute('lon'), ele: +(p.querySelector('ele')?.textContent || 0), t: tm ? Date.parse(tm) : NaN };
+  }).filter(p => isFinite(p.lat) && isFinite(p.lon));
   if (pts.length < 2) throw new Error('El archivo no tiene un recorrido (puntos trkpt).');
   return pts;
 }
-
-// Reparte el recorrido en puntos equidistantes: animación pareja aunque el GPS grabe a ritmos distintos.
+// Puntos equidistantes [lon, lat, ele, tiempo]: la animación va pareja aunque el GPS grabe a ritmos distintos.
 function resample(raw) {
   const cum = [0];
   for (let i = 1; i < raw.length; i++) cum.push(cum[i - 1] + hav(raw[i - 1], raw[i]));
   total = cum[cum.length - 1];
   if (total < 20) throw new Error('El recorrido es demasiado corto.');
   step = Math.max(5, total / 3000);
-  const out = []; let j = 0;
+  hasTime = raw.every(p => isFinite(p.t));
+  const keys = ['lon', 'lat', 'ele', 't'], out = []; let j = 0;
   for (let d = 0; d <= total; d += step) {
     while (j < cum.length - 2 && cum[j + 1] < d) j++;
     const f = Math.min(1, (d - cum[j]) / (cum[j + 1] - cum[j] || 1));
-    out.push([0, 1, 2].map(k => { const key = ['lon', 'lat', 'ele'][k]; return raw[j][key] + (raw[j + 1][key] - raw[j][key]) * f; }));
+    out.push(keys.map(k => raw[j][k] + (raw[j + 1][k] - raw[j][k]) * f));
   }
-  const l = raw[raw.length - 1]; out.push([l.lon, l.lat, l.ele]);
-  // desnivel positivo con elevación suavizada (ventana de 5 puntos)
-  const e = out.map((_, i) => { const s = out.slice(Math.max(0, i - 2), i + 3); return s.reduce((a, p) => a + p[2], 0) / s.length; });
-  gain = 0; for (let i = 1; i < e.length; i++) if (e[i] > e[i - 1]) gain += e[i] - e[i - 1];
+  const l = raw[raw.length - 1]; out.push(keys.map(k => l[k]));
+  E = out.map((_, i) => { const s = out.slice(Math.max(0, i - 4), i + 5); return s.reduce((a, p) => a + p[2], 0) / s.length; });
+  gain = 0; for (let i = 1; i < E.length; i++) if (E[i] > E[i - 1]) gain += E[i] - E[i - 1];
+  emin = Math.min(...E); emax = Math.max(...E, emin + 10);
   return out;
 }
 function at(d) {
-  const u = Math.min(P.length - 1.0001, d / step), i = Math.floor(u), f = u - i;
-  return [0, 1, 2].map(k => P[i][k] + (P[i + 1][k] - P[i][k]) * f);
+  const u = Math.min(P.length - 1.0001, Math.max(0, d / step)), i = Math.floor(u), f = u - i;
+  return P[i].map((v, k) => v + (P[i + 1][k] - v) * f);
+}
+const fmtT = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
+
+// ---------- HUD (se dibuja en un canvas propio para que también salga en el video) ----------
+const hud = $('#hud'), hx = hud.getContext('2d');
+function syncHud() { const c = map.getCanvas(); hud.width = c.width; hud.height = c.height; }
+map.on('resize', syncHud);
+
+function drawHud(d) {
+  const s = hud.width / map.getContainer().clientWidth, W = hud.width, H = hud.height;
+  hx.clearRect(0, 0, W, H);
+  const p = at(d), i = Math.min(E.length - 1, Math.round(d / step));
+  const k = Math.max(1, Math.round(60 / step));
+  const slope = (E[Math.min(E.length - 1, i + k)] - E[Math.max(0, i - k)]) / (step * (Math.min(E.length - 1, i + k) - Math.max(0, i - k)) || 1) * 100;
+  let kmh = NaN;
+  if (hasTime) { const q = at(Math.max(0, d - 150)); kmh = (d - Math.max(0, d - 150)) / ((p[3] - q[3]) / 1000 || Infinity) * 3.6; }
+  const box = (x, y, w, h) => { hx.fillStyle = 'rgba(14,18,22,.72)'; hx.beginPath(); hx.roundRect(x * s, y * s, w * s, h * s, 12 * s); hx.fill(); };
+  const stat = (x, y, label, val) => {
+    hx.fillStyle = '#8d9aa6'; hx.font = `${11 * s}px system-ui,sans-serif`; hx.fillText(label.toUpperCase(), x * s, y * s);
+    hx.fillStyle = '#fff'; hx.font = `600 ${22 * s}px system-ui,sans-serif`; hx.fillText(val, x * s, (y + 24) * s);
+  };
+  box(12, 12, 232, 118);
+  stat(26, 36, 'Distancia', `${(d / 1000).toFixed(1)} km`);
+  stat(138, 36, 'Tiempo', hasTime ? fmtT(p[3] - P[0][3]) : '—');
+  stat(26, 88, 'Velocidad', isFinite(kmh) ? `${Math.min(99, Math.max(0, kmh)).toFixed(0)} km/h` : '—');
+  stat(138, 88, 'Altura', `${Math.round(E[i])} m`);
+  hx.fillStyle = Math.abs(slope) < 1 ? '#8d9aa6' : slope > 0 ? '#ff3d71' : '#2dd4bf';
+  hx.font = `600 ${12 * s}px system-ui,sans-serif`; hx.fillText(`${slope > 0 ? '+' : ''}${slope.toFixed(1)} %`, 196 * s, 112 * s);
+  // perfil de elevación
+  const x0 = 12, w = W / s - 24, y1 = H / s - 16, h = 70;
+  box(x0, y1 - h - 10, w, h + 20);
+  const N = Math.min(E.length, 260), X = n => (x0 + 10 + (n / (N - 1)) * (w - 20)) * s, Y = v => (y1 - 4 - ((v - emin) / (emax - emin)) * (h - 14)) * s;
+  const pr = d / total * (N - 1);
+  const trace = (upto) => { hx.beginPath(); hx.moveTo(X(0), (y1 - 4) * s); for (let n = 0; n <= upto; n++) hx.lineTo(X(n), Y(E[Math.round(n / (N - 1) * (E.length - 1))])); hx.lineTo(X(upto), (y1 - 4) * s); hx.closePath(); };
+  hx.fillStyle = 'rgba(255,255,255,.14)'; trace(N - 1); hx.fill();
+  hx.fillStyle = 'rgba(255,61,113,.75)'; trace(Math.floor(pr)); hx.fill();
+  hx.fillStyle = '#fff'; hx.beginPath(); hx.arc(X(pr), Y(E[i]), 5 * s, 0, 7); hx.fill();
 }
 
 // ---------- Animación ----------
 let t = 0, playing = false, last = 0, bearing = 0, recorder = null;
 const dur = () => +$('#dur').value;
 const fc = (type, coordinates) => ({ type: 'Feature', geometry: { type, coordinates }, properties: {} });
-
-function initBearing() { bearing = brg(at(0), at(Math.min(total, Math.max(150, total * 0.03)))); }
+const look = () => Math.max(150, total * 0.03);
+function initBearing() { bearing = brg(at(0), at(Math.min(total, look()))); }
 
 function draw(u) {
-  const d = u * total, p = at(d);
-  const ahead = Math.min(total - d, Math.max(150, total * 0.03));
-  if (ahead > 10) bearing = lerpAngle(bearing, brg(p, at(d + ahead)), 0.08);
-  map.jumpTo({ center: [p[0], p[1]], bearing, pitch: 68, zoom: 15.3 });
-  const i = Math.floor(d / step);
-  map.getSource('done').setData(fc('LineString', [...P.slice(0, i + 1), [p[0], p[1]]]));
+  const d = u * total, p = at(d), ahead = Math.min(total - d, look());
+  if (ahead > 10) bearing = lerpAngle(bearing, brg(p, at(d + ahead)), 0.06);
+  map.jumpTo({ center: [p[0], p[1]], bearing, pitch: 60, zoom: 15 });
+  map.getSource('done').setData(fc('LineString', [...P.slice(0, Math.floor(d / step) + 1).map(q => [q[0], q[1]]), [p[0], p[1]]]));
   map.getSource('pos').setData(fc('Point', [p[0], p[1]]));
-  $('#s2').innerHTML = `<b>${(d / 1000).toFixed(1)}</b> km · <b>${Math.round(p[2])}</b> m`;
+  drawHud(d);
 }
-
 function frame(now) {
   if (!playing) return;
   t = Math.min(1, t + (now - last) / 1000 / dur()); last = now;
   draw(t);
-  if (t >= 1) { playing = false; if (recorder) setTimeout(() => recorder.stop(), 400); ui(); return; }
+  if (t >= 1) { playing = false; if (recorder) setTimeout(() => recorder.stop(), 500); ui(); return; }
   requestAnimationFrame(frame);
 }
-function play() {
-  if (!P.length) return;
-  if (t >= 1) t = 0;
-  if (t === 0) initBearing();
-  playing = true; last = performance.now(); ui(); requestAnimationFrame(frame);
-}
+function play() { if (!P.length) return; if (t >= 1) t = 0; if (t === 0) initBearing(); playing = true; last = performance.now(); ui(); requestAnimationFrame(frame); }
 function pause() { playing = false; ui(); }
 
-// ---------- Grabación ----------
+// ---------- Grabación: junta mapa + HUD en un canvas y graba ese canvas ----------
+const outC = document.createElement('canvas'), ox = outC.getContext('2d');
+map.on('render', () => { if (recorder) { ox.drawImage(map.getCanvas(), 0, 0); ox.drawImage(hud, 0, 0); } });
 async function rec() {
   if (!P.length) return;
   if (!window.MediaRecorder) { alert('Este navegador no puede grabar video. Probá con Chrome.'); return; }
   pause(); t = 0; initBearing(); draw(0);
-  // Espera a que carguen los mapas del punto de partida (máx. 4 s)
   await Promise.race([new Promise(r => map.once('idle', r)), new Promise(r => setTimeout(r, 4000))]);
+  outC.width = hud.width; outC.height = hud.height;
   const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m));
   const chunks = [];
-  recorder = new MediaRecorder(map.getCanvas().captureStream(30), { mimeType: mime, videoBitsPerSecond: 6e6 });
+  recorder = new MediaRecorder(outC.captureStream(30), { mimeType: mime, videoBitsPerSecond: 8e6 });
   recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
   recorder.onstop = () => {
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
-    a.download = 'ruta-3d.webm'; a.click();
+    a.href = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' })); a.download = 'ruta-3d.webm'; a.click();
     recorder = null; ui();
   };
   recorder.start(); play();
@@ -193,31 +226,25 @@ async function rec() {
 // ---------- Interfaz ----------
 function ui() {
   const has = P.length > 0;
-  $('#play').disabled = !has || !!recorder;
-  $('#rec').disabled = !has || !!recorder;
+  $('#play').disabled = !has || !!recorder; $('#rec').disabled = !has || !!recorder;
   $('#play').textContent = playing ? 'Pausar' : (t >= 1 ? 'Repetir' : 'Reproducir');
   $('#rec').textContent = recorder ? 'Grabando…' : 'Grabar video';
 }
 $('#play').onclick = () => playing ? pause() : play();
 $('#rec').onclick = rec;
 $('#dur').oninput = e => $('#durv').textContent = e.target.value + ' s';
-$('#sat').onchange = e => {
-  map.setLayoutProperty('sat', 'visibility', e.target.checked ? 'visible' : 'none');
-  map.setLayoutProperty('osm', 'visibility', e.target.checked ? 'none' : 'visible');
-};
+$('#sty').onchange = e => ['dark', 'osm', 'sat'].forEach(id => map.setLayoutProperty(id, 'visibility', id === e.target.value ? 'visible' : 'none'));
 $('#file').onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
   try {
     pause(); recorder = null;
-    P = resample(parseGPX(await f.text()));
-    t = 0;
+    P = resample(parseGPX(await f.text())); t = 0;
     map.getSource('route').setData(fc('LineString', P.map(p => [p[0], p[1]])));
     map.getSource('done').setData(empty); map.getSource('pos').setData(empty);
     const b = P.reduce((bb, p) => bb.extend([p[0], p[1]]), new maplibregl.LngLatBounds([P[0][0], P[0][1]], [P[0][0], P[0][1]]));
     map.fitBounds(b, { padding: 50, pitch: 50, bearing: 0, duration: 1200 });
-    $('#s1').innerHTML = `<b>${(total / 1000).toFixed(1)}</b> km · <b>+${Math.round(gain)}</b> m`;
-    $('#s2').textContent = '';
-    $('#empty').hidden = true;
+    $('#s1').innerHTML = `<b>${(total / 1000).toFixed(1)}</b> km · <b>+${Math.round(gain)}</b> m de desnivel` + (hasTime ? ` · <b>${fmtT(P[P.length - 1][3] - P[0][3])}</b>` : '');
+    $('#empty').hidden = true; hx.clearRect(0, 0, hud.width, hud.height);
   } catch (err) { P = []; alert(err.message); }
   ui(); e.target.value = '';
 };
