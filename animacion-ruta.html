@@ -14,7 +14,10 @@ body{display:flex;flex-direction:column;height:100dvh}
 #map,#hud{position:absolute;inset:0;width:100%;height:100%}
 #hud{pointer-events:none}
 #map{background:linear-gradient(#0b1d46 0%,#2a3f6b 40%)}
-.maplibregl-ctrl-bottom-right,.maplibregl-ctrl-bottom-left{bottom:104px}
+#tools{position:absolute;right:10px;top:112px;display:grid;gap:8px;z-index:5}
+#tools button{width:42px;height:42px;padding:0;border-radius:50%;background:rgba(18,22,26,.88);font-size:18px;line-height:1}
+#panel.off{display:none}
+#credits{color:var(--mute);font-size:12px;line-height:1.35}
 #empty{position:absolute;left:16px;right:16px;top:16px;padding:14px 16px;background:rgba(18,22,26,.88);border-radius:10px;max-width:420px}
 #empty p{margin:0 0 4px}#empty small{color:var(--mute)}
 #panel{background:var(--panel);border-top:1px solid var(--line);padding:12px 14px calc(12px + env(safe-area-inset-bottom,0px));display:grid;gap:10px}
@@ -35,6 +38,10 @@ input[type=range]{flex:1;accent-color:var(--route)}
 <div id="stage">
   <div id="map"></div>
   <canvas id="hud"></canvas>
+  <div id="tools">
+    <button id="tglPanel" aria-label="Mostrar u ocultar los controles">☰</button>
+    <button id="tglHud" aria-label="Mostrar u ocultar los datos">📊</button>
+  </div>
   <div id="empty"><p>Cargá un archivo GPX para ver tu recorrido en 3D.</p><small>Sirve el que exportaste de OsmAnd.</small></div>
 </div>
 <div id="panel">
@@ -50,6 +57,7 @@ input[type=range]{flex:1;accent-color:var(--route)}
     <input id="dur" type="range" min="10" max="120" step="5" value="30">
     <select id="sty" aria-label="Estilo de mapa"><option value="dark">Oscuro</option><option value="sat">Satélite</option><option value="osm">Calles</option></select>
   </div>
+  <small id="credits">Mapas: © OpenStreetMap · Imágenes © Esri, HERE, Garmin · Relieve: Mapzen/AWS · MapLibre</small>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
@@ -60,7 +68,7 @@ const DEM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}
 const ras = (tiles, attribution, maxzoom = 19) => ({ type: 'raster', tiles, tileSize: 256, maxzoom, attribution });
 
 const map = new maplibregl.Map({
-  container: 'map', center: [-64, -34], zoom: 4, maxPitch: 80, preserveDrawingBuffer: true,
+  container: 'map', center: [-64, -34], zoom: 4, maxPitch: 80, preserveDrawingBuffer: true, attributionControl: false,
   style: {
     version: 8,
     sources: {
@@ -85,7 +93,8 @@ map.on('load', () => {
   map.setTerrain({ source: 'dem', exaggeration: 1.15 });
   ['route', 'done', 'start', 'pos'].forEach(id => map.addSource(id, { type: 'geojson', data: empty }));
   const cap = { 'line-cap': 'round', 'line-join': 'round' };
-  map.addLayer({ id: 'route', type: 'line', source: 'route', layout: cap, paint: { 'line-color': '#fff', 'line-opacity': 0.5, 'line-width': 3 } });
+  map.addLayer({ id: 'route-case', type: 'line', source: 'route', layout: cap, paint: { 'line-color': '#0b0f14', 'line-opacity': 0.55, 'line-width': 7 } });
+  map.addLayer({ id: 'route', type: 'line', source: 'route', layout: cap, paint: { 'line-color': '#fff', 'line-opacity': 0.95, 'line-width': 3.5 } });
   map.addLayer({ id: 'glow', type: 'line', source: 'done', layout: cap, paint: { 'line-color': '#0b0f14', 'line-width': 10, 'line-opacity': 0.7 } });
   map.addLayer({ id: 'done', type: 'line', source: 'done', layout: cap, paint: { 'line-color': '#ff3d71', 'line-width': 5 } });
   map.addLayer({ id: 'start', type: 'circle', source: 'start', paint: { 'circle-radius': 7, 'circle-color': '#7ed957', 'circle-stroke-color': '#0b0f14', 'circle-stroke-width': 3 } });
@@ -146,10 +155,12 @@ const fmtT = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Mat
 
 // ---------- HUD (se dibuja en un canvas propio para que también salga en el video) ----------
 const hud = $('#hud'), hx = hud.getContext('2d');
+let hudOn = true;
 function syncHud() { const c = map.getCanvas(); hud.width = c.width; hud.height = c.height; }
-map.on('resize', syncHud);
+map.on('resize', () => { syncHud(); redraw(); });
 
 function drawHud(d) {
+  if (!hudOn) { hx.clearRect(0, 0, hud.width, hud.height); return; }
   const s = hud.width / map.getContainer().clientWidth, W = hud.width, H = hud.height;
   hx.clearRect(0, 0, W, H);
   const p = at(d), i = Math.min(E.length - 1, Math.round(d / step));
@@ -188,6 +199,22 @@ const fc = (type, coordinates) => ({ type: 'Feature', geometry: { type, coordina
 const look = () => Math.max(150, total * 0.03);
 function initBearing() { bearing = brg(at(0), at(Math.min(total, look()))); }
 function settle() { for (let i = 0; i < 25; i++) draw(t); }
+// Datos del circuito completo (antes de reproducir y durante la entrada)
+function drawIdle() {
+  drawHud(0);
+  if (!hudOn || !P.length) return;
+  const s = hud.width / map.getContainer().clientWidth, ms = hasTime ? P[P.length - 1][3] - P[0][3] : NaN;
+  hx.clearRect(0, 0, 260 * s, 140 * s);
+  hx.fillStyle = 'rgba(14,18,22,.72)'; hx.beginPath(); hx.roundRect(12 * s, 12 * s, 232 * s, 118 * s, 12 * s); hx.fill();
+  [[26, 36, 'Distancia', `${(total / 1000).toFixed(1)} km`], [138, 36, 'Tiempo', hasTime ? fmtT(ms) : '—'], [26, 88, 'Desnivel', `+${Math.round(gain)} m`], [138, 88, 'Alt. máx.', `${Math.round(emax)} m`]].forEach(([x, y, l, v]) => {
+    hx.fillStyle = '#8d9aa6'; hx.font = `${11 * s}px system-ui,sans-serif`; hx.fillText(l.toUpperCase(), x * s, y * s);
+    hx.fillStyle = '#fff'; hx.font = `600 ${22 * s}px system-ui,sans-serif`; hx.fillText(v, x * s, (y + 24) * s);
+  });
+}
+function redraw() {
+  if (!P.length) return;
+  if (clock < INTRO) drawIdle(); else if (clock < INTRO + dur()) drawHud(t * total); else drawSummary(1);
+}
 
 function draw(u) {
   const d = u * total, p = at(d), ahead = Math.min(total - d, look());
@@ -195,7 +222,8 @@ function draw(u) {
   const H = map.getContainer().clientHeight;
   map.jumpTo({ center: [p[0], p[1]], bearing, pitch: 70, zoom: 15.2, padding: { top: padTop, bottom: 0, left: 0, right: 0 } });
   // El relieve desplaza el punto en pantalla: se corrige para dejarlo entre el panel de datos y el perfil.
-  padTop = Math.max(0, Math.min(H * 0.9, padTop + (H * 0.58 - map.project([p[0], p[1]]).y) * 0.5));
+  const py = map.project([p[0], p[1]]).y;
+  if (isFinite(py)) padTop = Math.max(0, Math.min(H * 0.9, padTop + (H * 0.58 - py) * 0.5));
   map.getSource('done').setData(fc('LineString', [...P.slice(0, Math.floor(d / step) + 1).map(q => [q[0], q[1]]), [p[0], p[1]]]));
   map.getSource('pos').setData(fc('Point', [p[0], p[1]]));
   drawHud(d);
@@ -208,9 +236,9 @@ const lerp = (a, b, s) => a + (b - a) * s;
 
 function intro(k) {
   const s = ease(k), a = at(0);
-  map.jumpTo({ center: [lerp(OV.lng, a[0], s), lerp(OV.lat, a[1], s)], zoom: lerp(OV.z, 15.2, s), pitch: 70 * s, bearing: lerpAngle(0, bearing, s), padding: { top: padTop * s, bottom: 0, left: 0, right: 0 } });
+  map.jumpTo({ center: [lerp(OV.lng, a[0], s), lerp(OV.lat, a[1], s)], zoom: lerp(OV.z, 15.2, s), pitch: 70 * s * s, bearing: lerpAngle(0, bearing, s), padding: { top: padTop * s, bottom: 0, left: 0, right: 0 } });
   map.getSource('done').setData(empty); map.getSource('pos').setData(fc('Point', [a[0], a[1]]));
-  hx.clearRect(0, 0, hud.width, hud.height);
+  drawIdle();
 }
 function outro(k) {
   const s = ease(k), e = at(total);
@@ -219,6 +247,7 @@ function outro(k) {
   drawSummary(Math.min(1, k * 2));
 }
 function drawSummary(al) {
+  if (!hudOn) { hx.clearRect(0, 0, hud.width, hud.height); return; }
   const s = hud.width / map.getContainer().clientWidth, W = hud.width / s, H = hud.height / s;
   hx.clearRect(0, 0, hud.width, hud.height); hx.globalAlpha = al;
   const w = Math.min(W - 24, 340), x = (W - w) / 2, y = H - 190, ms = hasTime ? P[P.length - 1][3] - P[0][3] : NaN;
@@ -232,11 +261,13 @@ function drawSummary(al) {
 }
 function frame(now) {
   if (!playing) return;
-  clock = Math.min(end(), clock + (now - last) / 1000); last = now;
-  const T = dur();
-  if (clock < INTRO) intro(clock / INTRO);
-  else if (clock < INTRO + T) { t = (clock - INTRO) / T; draw(t); }
-  else { t = 1; outro(Math.min(1, (clock - INTRO - T) / OUTRO)); }
+  const T = dur(), tn = performance.now();
+  clock = Math.min(end(), clock + (tn - last) / 1000); last = tn;
+  try {
+    if (clock < INTRO) intro(clock / INTRO);
+    else if (clock < INTRO + T) { t = (clock - INTRO) / T; draw(t); }
+    else { t = 1; outro(Math.min(1, (clock - INTRO - T) / OUTRO)); }
+  } catch (err) { playing = false; $('#s1').textContent = 'Error: ' + err.message; ui(); return; }
   if (clock >= end()) { playing = false; if (recorder) setTimeout(() => recorder.stop(), 500); ui(); return; }
   requestAnimationFrame(frame);
 }
@@ -283,6 +314,8 @@ function ui() {
 }
 $('#play').onclick = () => playing ? pause() : play();
 $('#rec').onclick = rec;
+$('#tglPanel').onclick = () => $('#panel').classList.toggle('off');
+$('#tglHud').onclick = () => { hudOn = !hudOn; $('#tglHud').style.opacity = hudOn ? 1 : 0.5; redraw(); };
 $('#dur').oninput = e => $('#durv').textContent = e.target.value + ' s';
 $('#sty').onchange = e => ['dark', 'osm', 'sat'].forEach(id => map.setLayoutProperty(id, 'visibility', id === e.target.value ? 'visible' : 'none'));
 $('#file').onchange = async e => {
@@ -298,7 +331,7 @@ $('#file').onchange = async e => {
     map.getSource('start').setData(fc('Point', [P[0][0], P[0][1]]));
     map.fitBounds(b, { padding: 50, pitch: 50, bearing: 0, duration: 1200 });
     $('#s1').innerHTML = `<b>${(total / 1000).toFixed(1)}</b> km · <b>+${Math.round(gain)}</b> m de desnivel` + (hasTime ? ` · <b>${fmtT(P[P.length - 1][3] - P[0][3])}</b>` : '');
-    $('#empty').hidden = true; hx.clearRect(0, 0, hud.width, hud.height);
+    $('#empty').hidden = true; syncHud(); drawIdle();
   } catch (err) { P = []; alert(err.message); }
   ui(); e.target.value = '';
 };
